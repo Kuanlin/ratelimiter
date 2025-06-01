@@ -62,7 +62,7 @@ impl TokenBucket {
 
                 if state.tokens >= 1.0 {
                     state.tokens -= 1.0;
-                    //println!("TokenBucket: acquired token, remaining: {:.2}", state.tokens);
+                    println!("TokenBucket: acquired token, remaining: {:.2}", state.tokens);
                     None
                 } else {
                     let wait_time = (1.0 - state.tokens) / state.refill_rate;
@@ -73,7 +73,7 @@ impl TokenBucket {
             match delay {
                 None => break,
                 Some(delay) => {
-                    //println!("TokenBucket: waiting {:?} for next token", delay);
+                    println!("TokenBucket: waiting {:?} for next token", delay);
                     sleep(delay).await;
                 }
             }
@@ -136,7 +136,7 @@ impl LeakyBucket {
 
                 if state.queue_size < state.max_size {
                     state.queue_size += 1;
-                    //println!("LeakyBucket: acquired slot, queue size: {}/{}", state.queue_size, state.max_size);
+                    println!("LeakyBucket: acquired slot, queue size: {}/{}", state.queue_size, state.max_size);
                     None
                 } else {
                     let wait_time = 1.0 / state.leak_rate;
@@ -147,7 +147,7 @@ impl LeakyBucket {
             match delay {
                 None => break,
                 Some(delay) => {
-                    //println!("LeakyBucket: waiting {:?} for leak", delay);
+                    println!("LeakyBucket: waiting {:?} for leak", delay);
                     sleep(delay).await;
                 }
             }
@@ -206,12 +206,12 @@ impl FixedWindow {
                 if now.duration_since(state.window_start) >= state.window_duration {
                     state.count = 0;
                     state.window_start = now;
-                    //println!("FixedWindow: window reset");
+                    println!("FixedWindow: window reset");
                 }
 
                 if state.count < state.max_count {
                     state.count += 1;
-                    //println!("FixedWindow: acquired {}/{}", state.count, state.max_count);
+                    println!("FixedWindow: acquired {}/{}", state.count, state.max_count);
                     None
                 } else {
                     let window_end = state.window_start + state.window_duration;
@@ -227,7 +227,7 @@ impl FixedWindow {
             match delay {
                 None => break,
                 Some(delay) => {
-                    //println!("FixedWindow: waiting {:?} for window reset", delay);
+                    println!("FixedWindow: waiting {:?} for window reset", delay);
                     sleep(delay).await;
                 }
             }
@@ -292,12 +292,12 @@ impl SlidingWindow {
                 }
                 let cleaned = initial_len - state.requests.len();
                 if cleaned > 0 {
-                    //println!("SlidingWindow: cleaned {} old requests", cleaned);
+                    println!("SlidingWindow: cleaned {} old requests", cleaned);
                 }
 
                 if state.requests.len() < state.max_count as usize {
                     state.requests.push_back(now);
-                    //println!("SlidingWindow: acquired {}/{}", state.requests.len(), state.max_count);
+                    println!("SlidingWindow: acquired {}/{}", state.requests.len(), state.max_count);
                     None
                 } else {
                     if let Some(&oldest) = state.requests.front() {
@@ -317,7 +317,7 @@ impl SlidingWindow {
             match delay {
                 None => break,
                 Some(delay) => {
-                    //println!("SlidingWindow: waiting {:?} for oldest request to expire", delay);
+                    println!("SlidingWindow: waiting {:?} for oldest request to expire", delay);
                     sleep(delay).await;
                 }
             }
