@@ -32,7 +32,7 @@ impl TokenBucket {
         }
     }
 
-    pub fn max(self, max_tokens: u32) -> Self {
+    pub fn bucket_size(self, max_tokens: u32) -> Self {
         {
             let mut state = self.state.lock().unwrap();
             state.max_tokens = max_tokens;
@@ -41,10 +41,10 @@ impl TokenBucket {
         self
     }
 
-    pub fn refill_rate(self, rate: f64) -> Self {
+    pub fn refill_rate(self, tokens_per_second: f64) -> Self {
         {
             let mut state = self.state.lock().unwrap();
-            state.refill_rate = rate;
+            state.refill_rate = tokens_per_second;
         }
         self
     }
@@ -107,18 +107,18 @@ impl LeakyBucket {
         }
     }
 
-    pub fn max(self, max_size: u32) -> Self {
+    pub fn bucket_size(self, max_capacity: u32) -> Self {
         {
             let mut state = self.state.lock().unwrap();
-            state.max_size = max_size;
+            state.max_size = max_capacity;
         }
         self
     }
 
-    pub fn leaky_rate(self, rate: f64) -> Self {
+    pub fn leak_rate(self, requests_per_second: f64) -> Self {
         {
             let mut state = self.state.lock().unwrap();
-            state.leak_rate = rate;
+            state.leak_rate = requests_per_second;
         }
         self
     }
@@ -181,15 +181,15 @@ impl FixedWindow {
         }
     }
 
-    pub fn max(self, max_count: u32) -> Self {
+    pub fn limit(self, max_requests: u32) -> Self {
         {
             let mut state = self.state.lock().unwrap();
-            state.max_count = max_count;
+            state.max_count = max_requests;
         }
         self
     }
 
-    pub fn duration(self, seconds: u64) -> Self {
+    pub fn window_size(self, seconds: u64) -> Self {
         {
             let mut state = self.state.lock().unwrap();
             state.window_duration = Duration::from_secs(seconds);
@@ -259,15 +259,15 @@ impl SlidingWindow {
         }
     }
 
-    pub fn max(self, max_count: u32) -> Self {
+    pub fn limit(self, max_requests: u32) -> Self {
         {
             let mut state = self.state.lock().unwrap();
-            state.max_count = max_count;
+            state.max_count = max_requests;
         }
         self
     }
 
-    pub fn duration(self, seconds: u64) -> Self {
+    pub fn window_size(self, seconds: u64) -> Self {
         {
             let mut state = self.state.lock().unwrap();
             state.window_duration = Duration::from_secs(seconds);
@@ -404,7 +404,7 @@ mod tests {
     #[tokio::test]
     async fn test_token_bucket() {
         let limiter = TokenBucket::new()
-            .max(5)
+            .bucket_size(5)
             .refill_rate(10.0);
 
         let start = Instant::now();
@@ -417,10 +417,41 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_leaky_bucket() {
+        let limiter = LeakyBucket::new()
+            .bucket_size(3)
+            .leak_rate(2.0);
+
+        let start = Instant::now();
+        for _ in 0..3 {
+            limiter.acquire().await;
+        }
+        let elapsed = start.elapsed();
+        
+        assert!(elapsed < Duration::from_millis(500));
+    }
+
+    #[tokio::test]
+    async fn test_fixed_window() {
+        let limiter = FixedWindow::new()
+            .limit(2)
+            .window_size(1);
+
+        limiter.acquire().await;
+        limiter.acquire().await;
+
+        let start = Instant::now();
+        limiter.acquire().await;
+        let elapsed = start.elapsed();
+        
+        assert!(elapsed >= Duration::from_millis(900));
+    }
+
+    #[tokio::test]
     async fn test_sliding_window() {
         let limiter = SlidingWindow::new()
-            .max(2)
-            .duration(1);
+            .limit(2)
+            .window_size(1);
 
         limiter.acquire().await;
         limiter.acquire().await;
@@ -435,8 +466,8 @@ mod tests {
     #[tokio::test]
     async fn test_rate_limited_task() {
         let limiter = FixedWindow::new()
-            .max(1)
-            .duration(1);
+            .limit(1)
+            .window_size(1);
 
         async fn dummy_task() -> i32 {
             42
@@ -450,8 +481,8 @@ mod tests {
     #[tokio::test]
     async fn test_concurrent_tasks() {
         let limiter = SlidingWindow::new()
-            .max(2)
-            .duration(2);
+            .limit(2)
+            .window_size(2);
 
         async fn dummy_request(id: i32) -> i32 {
             tokio::time::sleep(Duration::from_millis(100)).await;
