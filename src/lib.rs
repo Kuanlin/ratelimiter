@@ -16,7 +16,7 @@ pub struct TokenBucket {
 struct TokenBucketState {
     tokens: f64,
     max_tokens: u32,
-    refill_rate: f64, // tokens per second
+    refill_rate: f64,
     last_refill: Instant,
 }
 
@@ -36,7 +36,7 @@ impl TokenBucket {
         {
             let mut state = self.state.lock().unwrap();
             state.max_tokens = max_tokens;
-            state.tokens = state.tokens.min(max_tokens as f64);
+            state.tokens = max_tokens as f64; // 初始化為滿桶
         }
         self
     }
@@ -56,29 +56,32 @@ impl TokenBucket {
                 let now = Instant::now();
                 let elapsed = now.duration_since(state.last_refill).as_secs_f64();
                 
-                // Refill tokens
                 let new_tokens = elapsed * state.refill_rate;
                 state.tokens = (state.tokens + new_tokens).min(state.max_tokens as f64);
                 state.last_refill = now;
 
                 if state.tokens >= 1.0 {
                     state.tokens -= 1.0;
+                    println!("TokenBucket: acquired token, remaining: {:.2}", state.tokens);
                     None
                 } else {
                     let wait_time = (1.0 - state.tokens) / state.refill_rate;
-                    Some(Duration::from_secs_f64(wait_time))
+                    Some(Duration::from_secs_f64(wait_time.max(0.001)))
                 }
             };
 
             match delay {
                 None => break,
-                Some(delay) => sleep(delay).await,
+                Some(delay) => {
+                    println!("TokenBucket: waiting {:?} for next token", delay);
+                    sleep(delay).await;
+                }
             }
         }
     }
 }
 
-// Leaky Bucket 實現
+// LeakyBucket 實現
 #[derive(Debug, Clone)]
 pub struct LeakyBucket {
     state: Arc<Mutex<LeakyBucketState>>,
@@ -88,7 +91,7 @@ pub struct LeakyBucket {
 struct LeakyBucketState {
     queue_size: u32,
     max_size: u32,
-    leak_rate: f64, // items per second
+    leak_rate: f64,
     last_leak: Instant,
 }
 
@@ -127,29 +130,32 @@ impl LeakyBucket {
                 let now = Instant::now();
                 let elapsed = now.duration_since(state.last_leak).as_secs_f64();
                 
-                // Leak items
                 let leaked_items = (elapsed * state.leak_rate) as u32;
                 state.queue_size = state.queue_size.saturating_sub(leaked_items);
                 state.last_leak = now;
 
                 if state.queue_size < state.max_size {
                     state.queue_size += 1;
+                    println!("LeakyBucket: acquired slot, queue size: {}/{}", state.queue_size, state.max_size);
                     None
                 } else {
                     let wait_time = 1.0 / state.leak_rate;
-                    Some(Duration::from_secs_f64(wait_time))
+                    Some(Duration::from_secs_f64(wait_time.max(0.001)))
                 }
             };
 
             match delay {
                 None => break,
-                Some(delay) => sleep(delay).await,
+                Some(delay) => {
+                    println!("LeakyBucket: waiting {:?} for leak", delay);
+                    sleep(delay).await;
+                }
             }
         }
     }
 }
 
-// Fixed Window 實現
+// FixedWindow 實現
 #[derive(Debug, Clone)]
 pub struct FixedWindow {
     state: Arc<Mutex<FixedWindowState>>,
@@ -197,30 +203,39 @@ impl FixedWindow {
                 let mut state = self.state.lock().unwrap();
                 let now = Instant::now();
                 
-                // Check if window has expired
                 if now.duration_since(state.window_start) >= state.window_duration {
                     state.count = 0;
                     state.window_start = now;
+                    println!("FixedWindow: window reset");
                 }
 
                 if state.count < state.max_count {
                     state.count += 1;
+                    println!("FixedWindow: acquired {}/{}", state.count, state.max_count);
                     None
                 } else {
                     let window_end = state.window_start + state.window_duration;
-                    Some(window_end.duration_since(now))
+                    if window_end > now {
+                        let wait_time = window_end - now;
+                        Some(wait_time)
+                    } else {
+                        Some(Duration::from_millis(1))
+                    }
                 }
             };
 
             match delay {
                 None => break,
-                Some(delay) => sleep(delay).await,
+                Some(delay) => {
+                    println!("FixedWindow: waiting {:?} for window reset", delay);
+                    sleep(delay).await;
+                }
             }
         }
     }
 }
 
-// Sliding Window 實現
+// SlidingWindow 實現
 #[derive(Debug, Clone)]
 pub struct SlidingWindow {
     state: Arc<Mutex<SlidingWindowState>>,
@@ -267,7 +282,7 @@ impl SlidingWindow {
                 let now = Instant::now();
                 let window_start = now - state.window_duration;
                 
-                // Remove old requests
+                let initial_len = state.requests.len();
                 while let Some(&front_time) = state.requests.front() {
                     if front_time <= window_start {
                         state.requests.pop_front();
@@ -275,24 +290,36 @@ impl SlidingWindow {
                         break;
                     }
                 }
+                let cleaned = initial_len - state.requests.len();
+                if cleaned > 0 {
+                    println!("SlidingWindow: cleaned {} old requests", cleaned);
+                }
 
                 if state.requests.len() < state.max_count as usize {
                     state.requests.push_back(now);
+                    println!("SlidingWindow: acquired {}/{}", state.requests.len(), state.max_count);
                     None
                 } else {
-                    // Wait until the oldest request expires
                     if let Some(&oldest) = state.requests.front() {
                         let wait_until = oldest + state.window_duration;
-                        Some(wait_until.duration_since(now))
+                        if wait_until > now {
+                            let wait_time = wait_until - now;
+                            Some(wait_time)
+                        } else {
+                            Some(Duration::from_millis(1))
+                        }
                     } else {
-                        None
+                        Some(Duration::from_millis(1))
                     }
                 }
             };
 
             match delay {
                 None => break,
-                Some(delay) => sleep(delay).await,
+                Some(delay) => {
+                    println!("SlidingWindow: waiting {:?} for oldest request to expire", delay);
+                    sleep(delay).await;
+                }
             }
         }
     }
@@ -342,82 +369,31 @@ impl From<SlidingWindow> for AnyRateLimiter {
     }
 }
 
-// Rate Limited Task 包裝器
-pub struct RateLimitedTask<F> {
-    future: Option<F>,
-    limiter: Option<AnyRateLimiter>,
-    permit_acquired: bool,
+// 簡化的 RateLimitedTask 實現
+pub struct RateLimitedTaskBuilder<F> {
+    future: F,
 }
 
-impl<F> RateLimitedTask<F>
+impl<F> RateLimitedTaskBuilder<F>
 where
     F: Future,
 {
-    pub fn new(future: F) -> Self {
-        Self {
-            future: Some(future),
-            limiter: None,
-            permit_acquired: false,
-        }
-    }
-
-    pub fn limited_by<L: Into<AnyRateLimiter>>(mut self, limiter: L) -> Self {
-        self.limiter = Some(limiter.into());
-        self
-    }
-}
-
-impl<F> Future for RateLimitedTask<F>
-where
-    F: Future,
-{
-    type Output = F::Output;
-
-    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let this = unsafe { self.get_unchecked_mut() };
-        
-        // 如果沒有限流器，直接執行
-        if this.limiter.is_none() {
-            if let Some(future) = this.future.as_mut() {
-                let future = unsafe { Pin::new_unchecked(future) };
-                return future.poll(cx);
-            } else {
-                panic!("Future already consumed");
-            }
-        }
-
-        // 如果還沒獲得許可
-        if !this.permit_acquired {
-            if let Some(limiter) = &this.limiter {
-                // 創建 acquire future 並立即 poll
-                let mut acquire_future = Box::pin(limiter.acquire());
-                match acquire_future.as_mut().poll(cx) {
-                    Poll::Ready(()) => {
-                        this.permit_acquired = true;
-                        // 繼續執行原始 future
-                    }
-                    Poll::Pending => return Poll::Pending,
-                }
-            }
-        }
-
-        // 執行原始 future
-        if let Some(future) = this.future.as_mut() {
-            let future = unsafe { Pin::new_unchecked(future) };
-            future.poll(cx)
-        } else {
-            panic!("Future already consumed");
+    pub fn limited_by<L: Into<AnyRateLimiter>>(self, limiter: L) -> impl Future<Output = F::Output> {
+        let limiter = limiter.into();
+        async move {
+            limiter.acquire().await;
+            self.future.await
         }
     }
 }
 
-// 便利的構造函數 - 保持大寫以符合你的使用習慣
+// 便利的構造函數
 #[allow(non_snake_case)]
-pub fn RateLimitedTask<F>(future: F) -> RateLimitedTask<F>
+pub fn RateLimitedTask<F>(future: F) -> RateLimitedTaskBuilder<F>
 where
     F: Future,
 {
-    RateLimitedTask::new(future)
+    RateLimitedTaskBuilder { future }
 }
 
 #[cfg(test)]
@@ -429,7 +405,7 @@ mod tests {
     async fn test_token_bucket() {
         let limiter = TokenBucket::new()
             .max(5)
-            .refill_rate(10.0); // 10 tokens per second
+            .refill_rate(10.0);
 
         let start = Instant::now();
         for _ in 0..3 {
@@ -437,7 +413,6 @@ mod tests {
         }
         let elapsed = start.elapsed();
         
-        // 前面幾個請求應該很快完成
         assert!(elapsed < Duration::from_millis(500));
     }
 
@@ -447,11 +422,9 @@ mod tests {
             .max(2)
             .duration(1);
 
-        // 應該可以立即獲得兩次許可
         limiter.acquire().await;
         limiter.acquire().await;
 
-        // 第三次應該需要等待
         let start = Instant::now();
         limiter.acquire().await;
         let elapsed = start.elapsed();
@@ -494,7 +467,6 @@ mod tests {
 
         assert_eq!(result1, 1);
         assert_eq!(result2, 2);
-        // 兩個任務應該能並發執行
         assert!(elapsed < Duration::from_millis(500));
     }
 }
